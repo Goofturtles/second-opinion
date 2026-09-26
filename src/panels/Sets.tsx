@@ -135,8 +135,11 @@ function AnswerGrid({
       {answers.map((answer, i) =>
         prompts ? (
           <li key={i} className="grid grid-cols-[2.25rem_1fr] gap-x-3 gap-y-2 sm:grid-cols-[2.5rem_1fr_9rem] sm:items-center">
-            <span className="pt-1 text-[15px] text-white/60 sm:pt-0">Q{i + 1}</span>
+            <span aria-hidden="true" className="pt-1 text-[15px] text-white/60 sm:pt-0">
+              Q{i + 1}
+            </span>
             <label htmlFor={`answer-${i}`} className="text-[16px] leading-snug text-white">
+              <span className="sr-only">Q{i + 1}: </span>
               {prompts[i]}
             </label>
             <input
@@ -210,10 +213,16 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [askDownload, setAskDownload] = useState(false)
+  const [declined, setDeclined] = useState(false)
   const abort = useRef<AbortController | null>(null)
 
   // Closing the row stops the model, so the next question doesn't queue behind this one.
   useEffect(() => () => abort.current?.abort(), [])
+
+  // A typed question: say straight away if this browser can't do it, before any typing.
+  useEffect(() => {
+    if (!prompt) aiStatus().then((state) => state === 'unavailable' && setError(AI_UNAVAILABLE))
+  }, [])
 
   const run = async (downloadOk = false) => {
     if (!question.trim() || busy) return
@@ -225,6 +234,7 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
     const current = () => abort.current === controller && !controller.signal.aborted
     setError('')
     setText('')
+    setDeclined(false)
     const state = await aiStatus()
     if (!current()) return
     if (state === 'unavailable') return setError(AI_UNAVAILABLE)
@@ -282,7 +292,14 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
           </button>
         </div>
       )}
-      {askDownload ? <DownloadConsent yes="Download and show me" onYes={() => run(true)} onNo={() => setAskDownload(false)} /> : null}
+      {askDownload ? <DownloadConsent
+          yes="Download and show me"
+          onYes={() => run(true)}
+          onNo={() => {
+            setAskDownload(false)
+            setDeclined(true)
+          }}
+        /> : null}
       {/* Announced once when done, not re-read with every streamed word. */}
       <p aria-live="polite" className="sr-only">
         {busy ? 'Working it out…' : text ? 'The worked solution is ready, below.' : ''}
@@ -292,6 +309,11 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
         {text ? <p className="whitespace-pre-line text-[16px] leading-relaxed text-white/90">{text}</p> : null}
       </div>
       <ErrorLine message={error} />
+      {prompt && !busy && (error ? error !== AI_UNAVAILABLE : declined) ? (
+        <button type="button" onClick={() => run()} className={`${PILL_OUTLINE} mt-3`}>
+          Try again
+        </button>
+      ) : null}
       {text && !busy ? (
         <p className="mt-3 text-[14px] text-white/60">
           Worked out on your device by Chrome’s built-in AI. It can make mistakes, so check each step.
@@ -383,8 +405,8 @@ function Result({
   )
 }
 
-/** Writes a practice set on the device from a topic. Not a <form>: it sits inside the "Start a
- * set" form, and browsers silently drop a nested form (which made its button submit the set). */
+/** Writes a practice set on the device from a topic. A div, not a <form>: it once sat inside the
+ * "Start a set" form, where a nested form is silently dropped (and its button submitted the set). */
 function AiQuestions({
   onQuestions,
   onCancel,
@@ -406,6 +428,8 @@ function AiQuestions({
   useEffect(() => {
     // Only when opened by a tap: on a link's first render the panel is still claiming focus.
     if (focusTopic) topicRef.current?.focus()
+    // Say straight away if this browser can't do it, before anyone types a topic.
+    aiStatus().then((state) => state === 'unavailable' && setError(AI_UNAVAILABLE))
     // Cancel or closing the panel stops the model, so a late reply can't replace the form.
     return () => abort.current?.abort()
   }, [])
@@ -426,7 +450,7 @@ function AiQuestions({
     try {
       const questions = await writeQuestions(topic.trim(), count, {
         signal: controller.signal,
-        onProgress: (f) => setStatus(f < 1 ? describeProgress(f) : 'Writing questions…'),
+        onProgress: (f) => !controller.signal.aborted && setStatus(f < 1 ? describeProgress(f) : 'Writing questions…'),
       })
       if (!controller.signal.aborted) onQuestions(questions)
     } catch (e) {

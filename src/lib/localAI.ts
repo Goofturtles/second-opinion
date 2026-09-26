@@ -34,11 +34,16 @@ export async function aiStatus(): Promise<AiStatus> {
   }
 }
 
-/** Turns what went wrong into something a student can act on. */
-function friendly(error: unknown): Error {
+/** Turns what went wrong into something a student can act on. `started` is whether the model
+ * had already opened: after that, "not supported" is about the request (a reply in a language it
+ * doesn't do, say), not the browser. */
+function friendly(error: unknown, started: boolean): Error {
   const e = error as { name?: string; message?: string }
   if (e?.name === 'AbortError') return Object.assign(new Error('Stopped.'), { name: 'AbortError' })
   if (e?.name === 'NotAllowedError') return new Error('Chrome wants a tap to start its AI. Try the button again.')
+  if (e?.name === 'NotSupportedError' && started) {
+    return new Error('The AI couldn’t answer that. It only works in English, so try wording it in English.')
+  }
   if (e?.name === 'NotSupportedError' || e?.name === 'OperationError') return new Error(AI_UNAVAILABLE)
   if (e?.name === 'QuotaExceededError') return new Error('That was too long for the AI. Try a shorter question.')
   if (error instanceof SyntaxError) return new Error('The AI’s reply came out garbled. Try again.')
@@ -60,30 +65,40 @@ async function open(system: string, signal?: AbortSignal, onProgress?: (fraction
 }
 
 // The model tends to answer in Markdown and LaTeX even when asked not to; students should see
-// "3/4", not "$\frac{3}{4}$" or "**Step 1**".
+// "3/4", not "$\frac{3}{4}$" or "**Step 1**". Every rule must keep the maths meaning the same:
+// the text becomes the question both people see.
+const SYMBOLS: Record<string, string> = {
+  times: '×', div: '÷', cdot: '·', cdots: '…', ldots: '…', dots: '…', pm: '±',
+  le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', approx: '≈', infty: '∞', degree: '°',
+  pi: 'π', theta: 'θ', alpha: 'α', beta: 'β',
+}
+// A fraction's top or bottom keeps its brackets unless it's a single number or name.
+const group = (part: string) => (/^[A-Za-z0-9.²³]+$/.test(part) ? part : `(${part})`)
+
 export function plainText(text: string) {
-  return text
-    .replace(/\$\$?([^$]+)\$\$?/g, (_, math: string) => math)
-    .replace(/\\\(|\\\)|\\\[|\\\]/g, '')
-    .replace(/\\d?frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
-    .replace(/\((\w+)\)\/\((\w+)\)/g, '$1/$2')
-    .replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
-    .replace(/\\times/g, '×')
-    .replace(/\\div/g, '÷')
-    .replace(/\\cdot/g, '·')
-    .replace(/\\pm/g, '±')
-    .replace(/\\(le|leq)\b/g, '≤')
-    .replace(/\\(ge|geq)\b/g, '≥')
-    .replace(/\\(neq|ne)\b/g, '≠')
-    .replace(/\\(left|right|,|;|!|quad)/g, '')
-    .replace(/\^\{?2\}?(?![0-9])/g, '²')
-    .replace(/\^\{?3\}?(?![0-9])/g, '³')
-    .replace(/\\text\{([^{}]*)\}/g, '$1')
-    .replace(/[{}]/g, '')
-    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, '$1$2')
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/^\s*[-*]\s+/gm, '• ')
-    .replace(/`([^`]*)`/g, '$1')
+  return (
+    text
+      // $…$ counts as maths only by pandoc's rule (no space just inside either dollar, no digit
+      // straight after the closing one), so "a book costs $12 and a pen costs $3" keeps its money.
+      .replace(/\$\$([\s\S]+?)\$\$|\$(?!\s)([^$\n]*?[^\s$])\$(?!\d)/g, (_, display?: string, inline?: string) => display ?? inline ?? '')
+      .replace(/\\\(|\\\)|\\\[|\\\]/g, '')
+      .replace(/\\(left|right|quad|qquad|displaystyle)\b|\\[,;!]/g, '')
+      .replace(/\^\{?\\circ\}?/g, '°')
+      // Only a plain 2 or 3 becomes ² or ³; any other power keeps brackets: 2^(3x), x^(2.5).
+      .replace(/\^(\{2\}|2(?![\d.]))/g, '²')
+      .replace(/\^(\{3\}|3(?![\d.]))/g, '³')
+      .replace(/([\^_])\{([^{}]+)\}/g, '$1($2)')
+      .replace(/\\text\{([^{}]*)\}/g, '$1')
+      .replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
+      .replace(/\\d?frac\{([^{}]+)\}\{([^{}]+)\}/g, (_, top: string, bottom: string) => `${group(top)}/${group(bottom)}`)
+      // Known symbols become characters; any other command loses only its backslash (\sin → sin).
+      .replace(/\\([a-zA-Z]+)/g, (_, name: string) => SYMBOLS[name] ?? name)
+      .replace(/[{}]/g, '')
+      .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, '$1$2')
+      .replace(/^#{1,6}\s*/gm, '')
+      .replace(/^\s*[-*]\s+/gm, '• ')
+      .replace(/`([^`]*)`/g, '$1')
+  )
 }
 
 const WRITER = `You write practice questions for high school students.
@@ -117,7 +132,7 @@ export async function writeQuestions(
     if (!questions.length) throw new Error('The AI didn’t write any usable questions. Try a more specific topic.')
     return questions.slice(0, count)
   } catch (error) {
-    throw friendly(error)
+    throw friendly(error, Boolean(session))
   } finally {
     session?.destroy()
   }
@@ -148,9 +163,10 @@ export async function explain(
       text += value // Chrome 148+ streams only the new part each time
       onText(plainText(text))
     }
+    if (!text.trim()) throw new Error('The AI didn’t reply. Try again.')
     return plainText(text)
   } catch (error) {
-    throw friendly(error)
+    throw friendly(error, Boolean(session))
   } finally {
     session?.destroy()
   }
