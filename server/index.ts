@@ -1,7 +1,7 @@
 // Standalone server for hosting: the built site from dist/ plus the API, in one Node process.
 //   npm run build && npm start
 // Optional: PORT, DATA_FILE (keep sets across restarts), REDIS_URL (the same, for hosts whose disk
-// is wiped on restart), TRUST_PROXY=1 (behind a host's proxy), ALLOWED_ORIGINS (a site hosted
+// is wiped on restart), TRUST_PROXY=n (behind n proxies; 3 on Render), ALLOWED_ORIGINS (a site hosted
 // elsewhere). Node 24 runs this TypeScript file directly. Run one process: sets live in its memory.
 
 import { createServer } from 'node:http'

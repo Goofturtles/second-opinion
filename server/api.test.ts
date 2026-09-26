@@ -154,6 +154,22 @@ describe('rate limiting behind a proxy', () => {
     limited.close()
     expect(statuses).toEqual([200, 200, 200, 429, 429])
   })
+
+  it('finds the visitor behind several proxies, and keeps visitors apart', async () => {
+    process.env.TRUST_PROXY = '3'
+    const limited = createServer(createApi(createStore(), { requestsPerMinute: 2, createsPerMinute: 2 }))
+    await new Promise<void>((resolve) => limited.listen(0, resolve))
+    const url = `http://localhost:${(limited.address() as AddressInfo).port}/api/sets/4K2P9`
+    // Each proxy appends who it heard from: the CDN edge writes the visitor, then two internal
+    // layers write the edge and each other, the same for everyone.
+    const as = (visitor: string, fake = '') => fetch(url, { headers: { 'x-forwarded-for': `${fake}${visitor}, 172.70.1.1, 10.0.0.9` } })
+    const one = [(await as('203.0.113.7')).status, (await as('203.0.113.7', '1.1.1.1, ')).status, (await as('203.0.113.7', '2.2.2.2, ')).status]
+    const other = (await as('198.51.100.4')).status
+    delete process.env.TRUST_PROXY
+    limited.close()
+    expect(one).toEqual([200, 200, 429])
+    expect(other).toBe(200)
+  })
 })
 
 describe('a store with a mirror', () => {

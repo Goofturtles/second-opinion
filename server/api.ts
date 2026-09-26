@@ -179,20 +179,26 @@ function describe(record: SetRecord) {
 }
 
 // Who's asking, for rate limits. Behind a host's proxy every request arrives from the proxy, so
-// TRUST_PROXY=1 reads the forwarding header instead, and takes its LAST entry: hosts append the
-// address they actually saw, while anything to its left was written by the visitor and can be
-// faked to dodge the limits. CLIENT_IP_HEADER names a host's own header (e.g. cf-connecting-ip)
+// TRUST_PROXY=n reads the forwarding header instead: each of the n proxies in front appends the
+// address it saw, so the visitor is the nth entry from the right. Anything further left was
+// written by the visitor and can be faked to dodge the limits. On *.onrender.com n is 3
+// (Cloudflare plus two Render layers); 1 there would put every visitor in one bucket, keyed on
+// Render's internal address. CLIENT_IP_HEADER names a host's own header (e.g. cf-connecting-ip)
 // when it has one. IPv6 addresses are grouped by /64, the block one household or phone gets.
+const header = (req: IncomingMessage, name: string) => {
+  const value = req.headers[name]
+  return Array.isArray(value) ? value.join(',') : value
+}
+const forwardedChain = (req: IncomingMessage) =>
+  (header(req, 'x-forwarded-for') ?? '').split(',').map((hop) => hop.trim()).filter(Boolean)
+
 function visitor(req: IncomingMessage) {
-  const header = (name: string) => {
-    const value = req.headers[name]
-    return Array.isArray(value) ? value.join(',') : value
-  }
   let address = req.socket.remoteAddress ?? 'unknown'
-  if (process.env.CLIENT_IP_HEADER) address = header(process.env.CLIENT_IP_HEADER.toLowerCase())?.trim() || address
+  if (process.env.CLIENT_IP_HEADER) address = header(req, process.env.CLIENT_IP_HEADER.toLowerCase())?.trim() || address
   else if (process.env.TRUST_PROXY) {
-    const hops = (header('x-forwarded-for') ?? '').split(',').map((hop) => hop.trim()).filter(Boolean)
-    address = hops[hops.length - 1] ?? address
+    const hops = forwardedChain(req)
+    const trusted = Math.max(1, Number(process.env.TRUST_PROXY) || 1)
+    address = hops[hops.length - trusted] ?? address
   }
   return address.includes(':') ? address.split(':').slice(0, 4).join(':') : address
 }
@@ -233,6 +239,9 @@ export function createApi(store: Store, limits = { requestsPerMinute: RATE_LIMIT
 
   async function route(req: IncomingMessage, path: string, query: URLSearchParams, who: string) {
     const parts = path.split('/').filter(Boolean) // ['sets', code?, action?]
+    // For the host's health check, and to confirm TRUST_PROXY: how many entries the proxies
+    // wrote (a visitor sending nothing sees exactly that many). Never the addresses themselves.
+    if (req.method === 'GET' && path === '/health') return [200, { ok: true, forwarded: forwardedChain(req).length }] as const
     if (parts[0] !== 'sets') throw new HttpError(404, 'Not found.')
     const code = parts[1]?.toUpperCase()
 

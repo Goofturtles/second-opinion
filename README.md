@@ -48,7 +48,7 @@ The production server (`server/index.ts`) reads these environment variables, all
 | `PORT` | Port to listen on (default 3533) |
 | `DATA_FILE` | Keep sets in a JSON file across restarts |
 | `REDIS_URL` | Keep sets in Redis/Key Value instead (for hosts whose disk is wiped on restart) |
-| `TRUST_PROXY=1` | Rate-limit by the address the host's proxy reports |
+| `TRUST_PROXY=n` | Rate-limit by the visitor's address as reported by the *n* proxies in front (3 on Render) |
 | `ALLOWED_ORIGINS` | Comma-separated sites allowed to call the API from another origin |
 
 The live site is on GitHub Pages; the API runs on Render's free plan, so the first request after a quiet spell can take up to a minute while it wakes. The practice set, the character and the AI all work without it.
