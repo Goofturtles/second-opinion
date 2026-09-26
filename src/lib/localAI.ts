@@ -91,11 +91,16 @@ Every question has exactly one short correct answer: a number, a single word, a 
 Keep each question under 180 characters. Write plain text only: no Markdown, no LaTeX.
 Never write questions that need a diagram, questions that ask "why" or "explain", or questions that give away their own answer.`
 
-export async function writeQuestions(topic: string, count: number, onProgress?: (fraction: number) => void) {
+export async function writeQuestions(
+  topic: string,
+  count: number,
+  options: { signal?: AbortSignal; onProgress?: (fraction: number) => void } = {},
+) {
   let session: Session | undefined
   try {
-    session = await open(WRITER, undefined, onProgress)
+    session = await open(WRITER, options.signal, options.onProgress)
     const raw = await session.prompt(`Write ${count} different practice questions about: ${topic}`, {
+      signal: options.signal,
       responseConstraint: {
         type: 'object',
         properties: {

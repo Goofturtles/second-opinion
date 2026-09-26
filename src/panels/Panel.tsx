@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, type ReactNode } from 'react'
 // A dialog: focus moves in on open and back to whatever opened it on close; Escape closes.
 
 export const PILL =
-  'inline-flex items-center justify-center whitespace-nowrap rounded-full px-5 py-[0.35em] text-[15px] transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex items-center justify-center whitespace-nowrap rounded-full px-5 py-[0.35em] text-[15px] transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40'
 export const PILL_SOLID = `${PILL} border border-black/10 bg-white text-black hover:bg-black hover:text-white hover:border-white`
 export const PILL_OUTLINE = `${PILL} border border-white bg-transparent text-white hover:bg-white hover:text-black`
 

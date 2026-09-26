@@ -25,6 +25,7 @@ const FAKE_AI = (state) => {
     create: async (options) => ({
       prompt: async (input) => {
         window.__ai.push({ system: options.initialPrompts[0].content, input })
+        await new Promise((r) => setTimeout(r, window.__aiDelay || 0))
         const n = Number(/Write (\d+)/.exec(input)?.[1] ?? 3)
         return JSON.stringify({ questions: Array.from({ length: n }, (_, i) => `AI question ${i + 1}: what is ${i + 2} × 3?`) })
       },
@@ -231,6 +232,46 @@ const FAKE_AI = (state) => {
   await f.waitForSelector('text=AI question 3')
   check(true, '"Download and write" goes ahead')
 
+  // --- Cancel while the AI is still writing: its late reply must not replace the form ---
+  const g = await person({ ai: true })
+  await g.goto(`${URL}#start/ai`)
+  await g.evaluate(() => (window.__aiDelay = 1200))
+  await g.fill('input[placeholder^="e.g."]', 'fractions')
+  await g.click(button('Write questions'))
+  await g.click('text=Cancel')
+  await g.fill('#answer-0', 'mine')
+  await g.fill('input[placeholder="Ch. 7, page 212"]', 'My sheet')
+  await g.waitForTimeout(1800)
+  check(
+    (await g.inputValue('#answer-0')) === 'mine' && (await g.locator('text=AI question').count()) === 0 && (await g.inputValue('input[placeholder="Ch. 7, page 212"]')) === 'My sheet',
+    'cancelling mid-write keeps the typed answers and title',
+  )
+  check(await g.evaluate(() => document.activeElement?.id === 'answer-0' || document.activeElement?.tagName === 'INPUT'), '  focus stays where the person is typing')
+
+  // --- picking the practice set while a slow search is still out wins ---
+  const h = await person()
+  await h.route('**/api/sets/ZZZZZ', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500))
+    await route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"No set with that code."}' })
+  })
+  await h.goto(`${URL}#join`)
+  await h.fill('input[aria-label="Set code"]', 'ZZZZZ')
+  await h.click(button('Find set'))
+  await h.click('text=Use the practice set')
+  await h.waitForTimeout(2200)
+  check(
+    (await h.locator('#answer-5').count()) === 1 && (await h.locator('text=No set with that code').count()) === 0 && (await h.getAttribute(button('Compare'), 'aria-disabled')) === null,
+    'a slow search can’t take over, or disable, the practice set',
+  )
+
+  // --- names that exist on every object don't open anything, or crash ---
+  const k = await person()
+  for (const name of ['constructor', 'toString', '__proto__']) {
+    await k.goto(`${URL}#${name}`)
+    await k.waitForTimeout(150)
+  }
+  check((await k.locator('[role=dialog]').count()) === 0 && (await k.locator('h1').count()) === 1, '#constructor, #toString and #__proto__ leave the page working')
+
   // --- the copy pill copies the practice code; phone menu works ---
   await c.keyboard.press('Escape')
   await c.click('main >> text=Set code')
@@ -249,7 +290,7 @@ const FAKE_AI = (state) => {
   await p1.fill('input[placeholder^="e.g."]', 'percentages')
   await p1.getByLabel('How many').fill('3')
   await p1.tap(button('Write questions'))
-  await p1.waitForSelector('#answer-2')
+  await p1.waitForSelector('text=AI question 3') // the plain grid already has an #answer-2
   for (const [i, v] of ['6', '9', '12'].entries()) await p1.fill(`#answer-${i}`, v)
   problems = await layoutProblems(p1)
   check(!problems.length, `phone AI set form: nothing clipped or sideways ${problems.join('; ')}`)

@@ -12,7 +12,7 @@ import { Panel, PILL_OUTLINE, PILL_SOLID } from './Panel'
 
 const POLL_MS = 4000
 const FIELD =
-  'h-11 w-full min-w-0 rounded-xl border border-white/20 bg-white/5 px-3 text-[17px] text-white outline-none transition-colors placeholder:text-white/35 focus:border-white'
+  'h-11 w-full min-w-0 rounded-xl border border-white/20 bg-white/5 px-3 text-[17px] text-white outline-none transition-colors placeholder:text-white/55 focus:border-white'
 
 type Props = { onClose: () => void; navigate: (hash: string) => void }
 
@@ -37,8 +37,9 @@ async function copy(text: string) {
   }
 }
 
+// In 10% steps, so a screen reader isn't handed every single percent.
 const describeProgress = (fraction: number) =>
-  fraction < 1 ? `Getting Chrome’s AI ready on this device… ${Math.round(fraction * 100)}%` : 'Thinking…'
+  fraction < 1 ? `Getting Chrome’s AI ready on this device… ${Math.floor(fraction * 10) * 10}%` : 'Thinking…'
 
 /** True once `active` has lasted longer than a moment: the free server may be waking up. */
 function useSlow(active: boolean, after = 3000) {
@@ -53,11 +54,12 @@ function useSlow(active: boolean, after = 3000) {
 }
 
 function WakingUp({ show }: { show: boolean }) {
-  return show ? (
-    <p aria-live="polite" className="mt-3 text-[15px] text-white/70">
-      Waking the server up. After a quiet spell the first request can take up to a minute.
+  // Always in the page, so the message is announced when it appears.
+  return (
+    <p aria-live="polite" className={show ? 'mt-3 text-[15px] text-white/70' : ''}>
+      {show ? 'Waking the server up. After a quiet spell the first request can take up to a minute.' : ''}
     </p>
-  ) : null
+  )
 }
 
 function ErrorLine({ message }: { message: string }) {
@@ -69,7 +71,19 @@ function ErrorLine({ message }: { message: string }) {
 }
 
 /** A number box you can clear and retype, without it snapping to 1 halfway through. */
-function CountInput({ label, value, max, onChange }: { label: string; value: number; max: number; onChange: (n: number) => void }) {
+function CountInput({
+  label,
+  value,
+  max,
+  onChange,
+  onEnter,
+}: {
+  label: string
+  value: number
+  max: number
+  onChange: (n: number) => void
+  onEnter?: () => void
+}) {
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
   return (
@@ -82,9 +96,16 @@ function CountInput({ label, value, max, onChange }: { label: string; value: num
         max={max}
         value={text}
         onChange={(e) => {
-          setText(e.target.value)
           const n = parseInt(e.target.value, 10)
+          // Past the maximum, show the number actually used.
+          setText(n > max ? String(max) : e.target.value)
           if (n >= 1) onChange(Math.min(n, max))
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault() // a count isn't a reason to submit the whole set
+            onEnter?.()
+          }
         }}
         onBlur={() => setText(String(value))}
         className={FIELD}
@@ -97,11 +118,18 @@ function AnswerGrid({
   answers,
   prompts,
   onChange,
+  focusFirst = false,
 }: {
   answers: string[]
   prompts?: string[]
   onChange: (index: number, value: string) => void
+  focusFirst?: boolean
 }) {
+  const firstRef = useRef<HTMLInputElement>(null)
+  // The button that led here is gone, so focus would fall to the page: start at Q1 instead.
+  useEffect(() => {
+    if (focusFirst && (!document.activeElement || document.activeElement === document.body)) firstRef.current?.focus()
+  }, [])
   return (
     <ol className={prompts ? 'mt-6 space-y-4' : 'mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3'}>
       {answers.map((answer, i) =>
@@ -112,6 +140,7 @@ function AnswerGrid({
               {prompts[i]}
             </label>
             <input
+              ref={i === 0 ? firstRef : undefined}
               id={`answer-${i}`}
               value={answer}
               onChange={(event) => onChange(i, event.target.value)}
@@ -129,6 +158,7 @@ function AnswerGrid({
               Q{i + 1}
             </label>
             <input
+              ref={i === 0 ? firstRef : undefined}
               id={`answer-${i}`}
               value={answer}
               onChange={(event) => onChange(i, event.target.value)}
@@ -147,11 +177,21 @@ function AnswerGrid({
 
 /** Asks before Chrome's first multi-GB model download instead of starting it silently. */
 function DownloadConsent({ onYes, onNo, yes }: { onYes: () => void; onNo: () => void; yes: string }) {
+  const yesRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    // Whatever asked for the AI gets focus back once this is answered and disappears.
+    const opener = document.activeElement
+    yesRef.current?.focus()
+    return () => {
+      const lost = !document.activeElement || document.activeElement === document.body
+      if (lost && opener instanceof HTMLElement && opener.isConnected) opener.focus()
+    }
+  }, [])
   return (
     <div className="mt-3">
       <p className="text-[15px] text-white/80">{AI_DOWNLOAD_NOTE}</p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" onClick={onYes} className={PILL_SOLID}>
+        <button ref={yesRef} type="button" onClick={onYes} className={PILL_SOLID}>
           {yes}
         </button>
         <button type="button" onClick={onNo} className={PILL_OUTLINE}>
@@ -177,25 +217,36 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
 
   const run = async (downloadOk = false) => {
     if (!question.trim() || busy) return
+    // Made before the first await, so closing the row at any moment stops this run, and a newer
+    // run (a double click) replaces it instead of racing it.
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    const current = () => abort.current === controller && !controller.signal.aborted
     setError('')
     setText('')
     const state = await aiStatus()
+    if (!current()) return
     if (state === 'unavailable') return setError(AI_UNAVAILABLE)
     if (state === 'downloadable' && !downloadOk) return setAskDownload(true)
     setAskDownload(false)
     setBusy(true)
     setStatus('Thinking…')
-    abort.current?.abort()
-    const controller = new AbortController()
-    abort.current = controller
     try {
-      await explain(question.trim(), myAnswer || undefined, (t) => {
-        setStatus('')
-        setText(t)
-      }, { signal: controller.signal, onProgress: (f) => setStatus(describeProgress(f)) })
+      await explain(
+        question.trim(),
+        myAnswer || undefined,
+        (t) => {
+          if (!current()) return
+          setStatus('')
+          setText(t)
+        },
+        { signal: controller.signal, onProgress: (f) => current() && setStatus(describeProgress(f)) },
+      )
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') setError((e as Error).message)
+      if (current()) setError((e as Error).message)
     }
+    if (!current()) return
     setStatus('')
     setBusy(false)
   }
@@ -226,13 +277,17 @@ function HowTo({ number, prompt, myAnswer }: { number: number; prompt?: string; 
             placeholder={`Type question ${number} from your sheet`}
             className={FIELD}
           />
-          <button type="button" onClick={() => run()} disabled={busy || !question.trim()} className={PILL_SOLID}>
+          <button type="button" onClick={() => run()} disabled={!question.trim()} aria-disabled={busy || undefined} className={PILL_SOLID}>
             Show me how
           </button>
         </div>
       )}
       {askDownload ? <DownloadConsent yes="Download and show me" onYes={() => run(true)} onNo={() => setAskDownload(false)} /> : null}
-      <div aria-live="polite" aria-busy={busy} className={prompt ? 'mt-3' : ''}>
+      {/* Announced once when done, not re-read with every streamed word. */}
+      <p aria-live="polite" className="sr-only">
+        {busy ? 'Working it out…' : text ? 'The worked solution is ready, below.' : ''}
+      </p>
+      <div aria-busy={busy} className={prompt ? 'mt-3' : ''}>
         {status ? <p className="text-[16px] text-white/70">{status}</p> : null}
         {text ? <p className="whitespace-pre-line text-[16px] leading-relaxed text-white/90">{text}</p> : null}
       </div>
@@ -260,13 +315,23 @@ function Result({
   onNew: () => void
 }) {
   const [open, setOpen] = useState<number | null>(null)
+  const headRef = useRef<HTMLHeadingElement>(null)
   const differ = verdicts.some((v) => v === 'differ')
+  // The button that led here is gone; start from the verdict rather than the top of the page.
+  useEffect(() => {
+    if (!document.activeElement || document.activeElement === document.body) headRef.current?.focus()
+  }, [])
   const friend = friendName ?? 'your friend'
   return (
     <div>
-      <p className="text-[30px] leading-[1.15] tracking-tight text-white sm:text-[38px]" style={{ fontFamily: 'var(--font-heading)' }}>
+      <h3
+        ref={headRef}
+        tabIndex={-1}
+        className="text-[30px] leading-[1.15] tracking-tight text-white outline-none sm:text-[38px]"
+        style={{ fontFamily: 'var(--font-heading)' }}
+      >
         {headlineFor(verdicts)}
-      </p>
+      </h3>
       <p className="mt-4">
         {differ
           ? `On each flagged question one of you slipped: maybe you, maybe ${friend}. You'll never see their answer, so the fixing is yours.`
@@ -320,28 +385,54 @@ function Result({
 
 /** Writes a practice set on the device from a topic. Not a <form>: it sits inside the "Start a
  * set" form, and browsers silently drop a nested form (which made its button submit the set). */
-function AiQuestions({ onQuestions, onCancel }: { onQuestions: (questions: string[]) => void; onCancel: () => void }) {
+function AiQuestions({
+  onQuestions,
+  onCancel,
+  focusTopic,
+}: {
+  onQuestions: (questions: string[]) => void
+  onCancel: () => void
+  focusTopic: boolean
+}) {
   const [topic, setTopic] = useState('')
   const [count, setCount] = useState(8)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [askDownload, setAskDownload] = useState(false)
+  const abort = useRef<AbortController | null>(null)
+  const topicRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    // Only when opened by a tap: on a link's first render the panel is still claiming focus.
+    if (focusTopic) topicRef.current?.focus()
+    // Cancel or closing the panel stops the model, so a late reply can't replace the form.
+    return () => abort.current?.abort()
+  }, [])
 
   const run = async (downloadOk = false) => {
     if (busy || !topic.trim()) return
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
     setError('')
     const state = await aiStatus()
+    if (controller.signal.aborted) return
     if (state === 'unavailable') return setError(AI_UNAVAILABLE)
     if (state === 'downloadable' && !downloadOk) return setAskDownload(true)
     setAskDownload(false)
     setBusy(true)
     setStatus('Writing questions…')
     try {
-      onQuestions(await writeQuestions(topic.trim(), count, (f) => setStatus(f < 1 ? describeProgress(f) : 'Writing questions…')))
+      const questions = await writeQuestions(topic.trim(), count, {
+        signal: controller.signal,
+        onProgress: (f) => setStatus(f < 1 ? describeProgress(f) : 'Writing questions…'),
+      })
+      if (!controller.signal.aborted) onQuestions(questions)
     } catch (e) {
-      setError((e as Error).message)
+      if (!controller.signal.aborted) setError((e as Error).message)
     }
+    if (controller.signal.aborted) return
     setStatus('')
     setBusy(false)
   }
@@ -352,6 +443,7 @@ function AiQuestions({ onQuestions, onCancel }: { onQuestions: (questions: strin
         <label className="flex min-w-0 flex-1 basis-56 flex-col gap-2 text-[15px] text-white/60">
           Topic
           <input
+            ref={topicRef}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             onKeyDown={(e) => {
@@ -365,10 +457,10 @@ function AiQuestions({ onQuestions, onCancel }: { onQuestions: (questions: strin
             className={FIELD}
           />
         </label>
-        <CountInput label="How many" value={count} max={MAX_AI_QUESTIONS} onChange={setCount} />
+        <CountInput label="How many" value={count} max={MAX_AI_QUESTIONS} onChange={setCount} onEnter={() => run()} />
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => run()} disabled={busy || !topic.trim()} className={PILL_SOLID}>
+        <button type="button" onClick={() => run()} disabled={!topic.trim()} aria-disabled={busy || undefined} className={PILL_SOLID}>
           {busy ? 'Writing…' : 'Write questions'}
         </button>
         <button type="button" onClick={onCancel} className="text-[15px] text-white/60 underline underline-offset-2 hover:text-white">
@@ -376,8 +468,9 @@ function AiQuestions({ onQuestions, onCancel }: { onQuestions: (questions: strin
         </button>
       </div>
       {askDownload ? <DownloadConsent yes="Download and write" onYes={() => run(true)} onNo={() => setAskDownload(false)} /> : null}
-      <p aria-live="polite" className="mt-3 text-[15px] text-white/60">
-        {status || 'Uses the AI built into Chrome, so nothing you type leaves this device.'}
+      <p className="mt-3 text-[15px] text-white/60">
+        <span aria-live="polite">{status}</span>
+        {status ? null : 'Uses the AI built into Chrome, so nothing you type leaves this device.'}
       </p>
       <ErrorLine message={error} />
     </div>
@@ -390,14 +483,27 @@ export function StartSet({ onClose, navigate, withAi = false }: Props & { withAi
   // Answers for every possible question, so shrinking the count and growing it back loses nothing.
   const [answers, setAnswers] = useState<string[]>(() => Array(MAX_QUESTIONS).fill(''))
   const [prompts, setPrompts] = useState<string[] | undefined>()
-  const [aiOpen, setAiOpen] = useState(withAi)
+  // 'link' when opened from #start/ai, 'tap' when the button was pressed (only then is the
+  // topic box focused straight away).
+  const [aiOpen, setAiOpen] = useState<false | 'link' | 'tap'>(withAi ? 'link' : false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const slow = useSlow(busy)
   const visible = answers.slice(0, count)
+  const aiButtonRef = useRef<HTMLButtonElement>(null)
+  const noteRef = useRef<HTMLParagraphElement>(null)
+  const focusNext = useRef<'ai-button' | 'note' | null>(null)
+
+  // What had focus (the AI box, or "Use my own worksheet") gets swapped out; hand focus on.
+  useEffect(() => {
+    const target = focusNext.current === 'ai-button' ? aiButtonRef.current : focusNext.current === 'note' ? noteRef.current : null
+    focusNext.current = null
+    target?.focus()
+  })
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
+    if (busy) return
     setBusy(true)
     setError('')
     try {
@@ -417,18 +523,23 @@ export function StartSet({ onClose, navigate, withAi = false }: Props & { withAi
       {!prompts ? (
         aiOpen ? (
           <AiQuestions
-            onCancel={() => setAiOpen(false)}
+            focusTopic={aiOpen === 'tap'}
+            onCancel={() => {
+              focusNext.current = 'ai-button'
+              setAiOpen(false)
+            }}
             onQuestions={(questions) => {
+              focusNext.current = 'note'
               setPrompts(questions)
               setCount(questions.length)
               setAnswers(Array(MAX_QUESTIONS).fill(''))
               setAiOpen(false)
-              if (!title.trim()) setTitle('AI practice set')
+              setTitle((current) => (current.trim() ? current : 'AI practice set'))
             }}
           />
         ) : (
           <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <button type="button" onClick={() => setAiOpen(true)} className={PILL_SOLID}>
+            <button ref={aiButtonRef} type="button" onClick={() => setAiOpen('tap')} className={PILL_SOLID}>
               Make a set with AI
             </button>
             <span className="text-[15px] text-white/60">No worksheet? It writes the questions for both of you.</span>
@@ -444,11 +555,12 @@ export function StartSet({ onClose, navigate, withAi = false }: Props & { withAi
           {!prompts ? <CountInput label="Questions" value={count} max={MAX_QUESTIONS} onChange={setCount} /> : null}
         </div>
         {prompts ? (
-          <p className="mt-6 text-[15px] text-white/60">
+          <p ref={noteRef} tabIndex={-1} className="mt-6 text-[15px] text-white/60 outline-none">
             {prompts.length} questions written by Chrome’s built-in AI. Read them before you answer: it can slip.{' '}
             <button
               type="button"
               onClick={() => {
+                focusNext.current = 'ai-button'
                 setPrompts(undefined)
                 setCount(10)
               }}
@@ -461,7 +573,7 @@ export function StartSet({ onClose, navigate, withAi = false }: Props & { withAi
         <AnswerGrid answers={visible} prompts={prompts} onChange={(i, v) => setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)))} />
         <ErrorLine message={error} />
         <div className="mt-8 flex flex-wrap items-center gap-3">
-          <button type="submit" disabled={busy || visible.every((a) => !a.trim())} className={PILL_SOLID}>
+          <button type="submit" disabled={visible.every((a) => !a.trim())} aria-disabled={busy || undefined} className={PILL_SOLID}>
             {busy ? 'Creating…' : 'Create set'}
           </button>
           <span className="text-[15px] text-white/60">Answers lock once the set is made.</span>
@@ -480,10 +592,15 @@ export function JoinSet({ onClose, navigate, initialCode }: Props & { initialCod
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const slow = useSlow(busy)
+  const latest = useRef(0)
 
   const find = async (value: string) => {
+    // A newer search, or picking the practice set, wins over a slow reply still on its way.
+    const search = ++latest.current
+    setError('')
     // The practice set lives in the page: instant, and it works while the server is asleep.
     if (value === DEMO_CODE) {
+      setBusy(false)
       setInfo({ code: DEMO.code, title: DEMO.title, count: DEMO.prompts.length, full: false, demo: true, friendName: DEMO.friendName, prompts: DEMO.prompts })
       setAnswers(Array(DEMO.prompts.length).fill(''))
       return
@@ -492,12 +609,13 @@ export function JoinSet({ onClose, navigate, initialCode }: Props & { initialCod
     // tapping it again): go to the result instead of a form that would take someone's place.
     if (tokens.get(value)) return navigate(`set/${value}`)
     setBusy(true)
-    setError('')
     try {
       const found = await api.info(value)
+      if (search !== latest.current) return
       setInfo(found)
       setAnswers(Array(found.count).fill(''))
     } catch (e) {
+      if (search !== latest.current) return
       setError((e as Error).message)
     }
     setBusy(false)
@@ -510,12 +628,12 @@ export function JoinSet({ onClose, navigate, initialCode }: Props & { initialCod
 
   const onFind = (event: FormEvent) => {
     event.preventDefault()
-    if (code.length === 5) find(code)
+    if (code.length === 5 && !busy) find(code)
   }
 
   const onCompare = async (event: FormEvent) => {
     event.preventDefault()
-    if (!info) return
+    if (!info || busy) return
     if (info.demo) return setVerdicts(compareSets(answers, DEMO.answers))
     setBusy(true)
     setError('')
@@ -547,10 +665,15 @@ export function JoinSet({ onClose, navigate, initialCode }: Props & { initialCod
                 ? `A practice set: ${info.friendName} has already answered. Type yours, then compare.`
                 : `${info.count} question${info.count === 1 ? '' : 's'}. Type your own answers, then compare.`}
             </p>
-            <AnswerGrid answers={answers} prompts={info.prompts} onChange={(i, v) => setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)))} />
+            <AnswerGrid
+              focusFirst
+              answers={answers}
+              prompts={info.prompts}
+              onChange={(i, v) => setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)))}
+            />
             <ErrorLine message={error} />
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <button type="submit" disabled={busy || answers.every((a) => !a.trim())} className={PILL_SOLID}>
+              <button type="submit" disabled={answers.every((a) => !a.trim())} aria-disabled={busy || undefined} className={PILL_SOLID}>
                 {busy ? 'Comparing…' : 'Compare'}
               </button>
               <span className="text-[15px] text-white/60">You’ll only see question numbers, never their answers.</span>
@@ -570,9 +693,9 @@ export function JoinSet({ onClose, navigate, initialCode }: Props & { initialCod
               autoComplete="off"
               autoCapitalize="characters"
               spellCheck={false}
-              className="h-14 w-44 rounded-xl border border-white/20 bg-white/5 px-4 text-center text-[26px] tracking-[0.2em] text-white outline-none placeholder:text-white/25 focus:border-white"
+              className="h-14 w-44 rounded-xl border border-white/20 bg-white/5 px-4 text-center text-[26px] tracking-[0.2em] text-white outline-none placeholder:text-white/40 focus:border-white"
             />
-            <button type="submit" disabled={busy || code.length !== 5} className={PILL_SOLID}>
+            <button type="submit" disabled={code.length !== 5} aria-disabled={busy || undefined} className={PILL_SOLID}>
               {busy ? 'Finding…' : 'Find set'}
             </button>
           </div>
@@ -673,6 +796,9 @@ export function SetView({ onClose, navigate, code }: Props & { code: string }) {
           <p>Send this code to one friend. They type their own answers, and you’ll both see where you differ.</p>
           <p className="mt-6 text-[52px] leading-none tracking-[0.16em] text-white sm:text-[72px]" style={{ fontFamily: 'var(--font-heading)' }}>
             {code}
+          </p>
+          <p aria-live="polite" className="sr-only">
+            {copied ? `${copied === 'link' ? 'Link' : 'Code'} copied.` : ''}
           </p>
           <div className="mt-6 flex flex-wrap gap-2">
             <button type="button" onClick={() => onCopy('link')} className={PILL_SOLID}>

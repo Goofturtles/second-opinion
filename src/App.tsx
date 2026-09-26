@@ -386,7 +386,7 @@ export default function App() {
     join: () => <JoinSet {...props} initialCode={route.code} />,
     set: () => (route.code ? <SetView {...props} code={route.code} /> : null),
   }
-  const panel = panels[route.name]?.() ?? null
+  const panel = Object.hasOwn(panels, route.name) ? panels[route.name]() : null
 
   return (
     <>

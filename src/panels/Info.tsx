@@ -84,7 +84,7 @@ export function Privacy({ onClose }: Props) {
       <dl className="space-y-6">
         {[
           ['What’s kept', 'The set’s name, its questions if they were written out (practice and AI-written sets), and each person’s answers, only so they can be compared.'],
-          ['Who sees answers', 'Nobody. The comparison happens on the server, and the only thing it ever sends back is which question numbers differ. Your friend never receives your answers, and you never receive theirs.'],
+          ['Who sees answers', 'Nobody. The comparison happens on the server, and the only thing it ever sends back is which question numbers differ. Your friend never receives your answers, and you never receive theirs. (The practice set 4K2P9 is the one exception: its pretend friend’s answers are built into the page, so it works offline.)'],
           ['For how long', 'Sets are deleted 48 hours after they’re made.'],
           ['What isn’t asked for', 'No account, no name, no email. A set is just a code.'],
           ['The AI', 'Writing questions and showing how to do one both use the AI built into Chrome, on your own device. What you ask it never goes to Second Opinion or anywhere else. Questions it writes for a set are saved with the set, like any other question.'],
@@ -126,7 +126,7 @@ const FAQS = [
   ['Does 0.75 count as the same as 3/4?', 'Yes. Fractions, decimals and mixed numbers become the same number first, and “x = 5” counts as 5. Rounded answers don’t match exact ones, so 0.33 and 1/3 get flagged.'],
   ['Why only one friend?', 'Two people are enough to catch a slip, and few enough that it never turns into an answer-sharing group.'],
   ['Can the AI just give me the answer?', 'Only after you’ve both submitted. Answers are locked by then, so it’s a tutor for afterwards, not a way to fix an answer before comparing.'],
-  ['No worksheet to check?', 'Tap “Make questions with AI” when you start a set: type a topic and it writes practice questions for both of you.'],
+  ['No worksheet to check?', 'Tap “Make a set with AI” when you start a set: type a topic and it writes practice questions for both of you.'],
   ['Can I try it alone?', 'Yes: join with the code 4K2P9. It’s a practice set with a pretend friend who got one question wrong.'],
 ]
 
